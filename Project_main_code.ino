@@ -15,7 +15,7 @@ const char* ssid     = "AirboxFC15";
 const char* password = "Ag@1234=A+G";
 
 // Define the server and API endpoint
-const char *server = "https://agricalitresystem.azurewebsites.net/";
+const char *server = "http://13.49.102.193:8000/";
 const char *endpoint = "api/embedded/create/";
 
 struct readings {
@@ -23,7 +23,8 @@ struct readings {
   float humidity;
   float rain;
   float soil;
-  float light;
+  String light;
+  bool pumpStatus = false;
 };
 
 readings sensorR;
@@ -66,17 +67,23 @@ void loop()
   ReadSoilMoisture();
   ReadRain();
 
-  // Build the JSON payload
-  String payload = "{\"humidity\":" + String(sensorR.humidity) + ",";
-  payload += "\"temperature\":" + String(sensorR.temperature) + ",";
-  payload += "\"light\":" + String(sensorR.light) + ",";
-  payload += "\"soil_moisture\":" + String(sensorR.soil) + ",";
-  payload += "\"rain\":" + String(sensorR.rain) + "}";
+  StaticJsonDocument<200> doc;
+     doc["temperature"] = sensorR.temperature;
+     doc["humidity"] = sensorR.humidity;
+     doc["light"] = sensorR.light;
+     doc["rainfall"] = sensorR.rain;
+     doc["soil_moisture"] = sensorR.soil;
+     doc["pump_on"] = sensorR.pumpStatus;
+     String jsonData;
+     serializeJson(doc, jsonData);
 
-  // Send the data to the server
-  SendData(payload);
-  
+     
+// Send the data to the server
+  SendData(jsonData);
+//  Serial.println(jsonData);
   Serial.println();
+
+ 
 }
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -101,21 +108,26 @@ void ReadDHT()
 
 void ReadLight()
 {
-  sensorR.light = map(analogRead(lm_apin), 0, 1500, 0, 1023);
+   float lightValue = map(analogRead(lm_apin), 0, 1500, 0, 1023);
   
   Serial.print("Light Sensor Value: ");
-  Serial.print(sensorR.light);
+  Serial.print(lightValue);
 
   // We'll have a few threshholds, qualitatively determined
-  if (sensorR.light < 100) {
+  if (lightValue < 100) {
+    sensorR.light = "Very bright";
     Serial.println(" - Very bright");
-  } else if (sensorR.light < 200) {
+  } else if (lightValue < 200) {
+    sensorR.light = "Bright";
     Serial.println(" - Bright");
-  } else if (sensorR.light < 500) {
+  } else if (lightValue < 500) {
+    sensorR.light = "Light";
     Serial.println(" - Light");
-  } else if (sensorR.light < 800) {
+  } else if (lightValue < 800) {
+    sensorR.light = "Dim";
     Serial.println(" - Dim");
   } else {
+    sensorR.light = "Dark";
     Serial.println(" - Dark");
   }
 }
@@ -124,20 +136,33 @@ void ReadSoilMoisture()
 {
   sensorR.soil = map(analogRead(mh_apin), 0, 4095, 0, 1023);
   
+    
   Serial.print("Soil Moisture Value: ");
   Serial.print(sensorR.soil);
+  float soilMoisture[2];
+  getData(server, soilMoisture);
+  
 
-  if (sensorR.soil < 500) {
+  if (sensorR.soil < soilMoisture[0]) {
     Serial.print(" - Soil is too wet");
     digitalWrite(relay_dpin,LOW);
+    sensorR.pumpStatus = false;
     Serial.println(" - PUMP OFF");
-  } else if (sensorR.soil >= 500 && sensorR.soil < 750) {
+    Serial.println(soilMoisture[0]);
+  }
+  else if (sensorR.soil >= soilMoisture[0] && sensorR.soil< soilMoisture[1])
+  {
     Serial.print(" - Soil moisture is perfect");
     digitalWrite(relay_dpin,LOW);
+    sensorR.pumpStatus = false;
     Serial.println(" - PUMP OFF");
-  } else {
+    Serial.println(soilMoisture[0],soilMoisture[1]);
+  }
+  else
+  {
     Serial.print(" - Soil is too dry");
     digitalWrite(relay_dpin,HIGH);
+    sensorR.pumpStatus = true;
     Serial.println(" - PUMP ON");
   }
 }
@@ -170,7 +195,8 @@ void SendData(String data) {
   http.addHeader("Content-Type", "application/json");
 
   // Create the JSON payload with the data
-  String payload = "{\"data\": " + data + "}";
+  //String payload = "data\"={" + data + "}";
+//  Serial.println(data);
 
   Serial.println();
   Serial.println("Sending data to " + url);
@@ -178,7 +204,7 @@ void SendData(String data) {
 //  Serial.println();
 
   // Send the POST request with the payload to the API endpoint
-  int httpCode = http.POST(payload);
+  int httpCode = http.POST(data);
 
   if (httpCode == HTTP_CODE_OK)
   {
@@ -193,18 +219,25 @@ void SendData(String data) {
   http.end();
 }
 
-float getdata()
+void getData(const char *server, float *values)
 {
   HTTPClient http;
-  String url =  String(server) + String(endpoint);
+  String url = String(server) + "/api/select/";
   http.begin(url);
   int httpCode = http.GET();
-  float soilMoisture = -1;
+
   if (httpCode == HTTP_CODE_OK)
   {
     String payload = http.getString();
-    soilMoisture = payload.toFloat();
+    StaticJsonDocument<256> doc;
+    deserializeJson(doc, payload);
+
+    float minValue = doc["soil_moisture_min"];
+    float maxValue = doc["soil_moisture_max"];
+
+    values[0] = minValue;
+    values[1] = maxValue;
   }
+
   http.end();
-  return soilMoisture;
 }
